@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live meeting capture</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        background: #0f1115; color: #e8e9ed; display: grid; place-items: center;
+      }
+      main { width: min(50rem, 94vw); padding: 2rem 0; }
+      h1 { font-size: 1.3rem; margin: 0 0 1.5rem; }
+      .roles { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+      .role-card {
+        flex: 1 1 14rem; border: 1px solid #22262e; border-radius: 12px; padding: 1.25rem;
+        text-align: center; background: #171a21;
+      }
+      .role-card h2 { margin: 0 0 0.75rem; text-transform: capitalize; font-size: 1rem; }
+      .role-card img { width: 160px; height: 160px; background: #fff; border-radius: 8px; }
+      .pill {
+        display: inline-flex; align-items: center; gap: 0.4rem; margin-top: 0.75rem;
+        font-size: 0.8rem; opacity: 0.7;
+      }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #555b66; }
+      .pill.on .dot { background: #4ade80; }
+      .pill.on { opacity: 1; color: #4ade80; }
+      .controls { display: flex; gap: 0.75rem; margin-bottom: 1.5rem; }
+      button {
+        padding: 0.7rem 1.6rem; border-radius: 999px; border: 0; cursor: pointer;
+        font: inherit; font-weight: 600; background: #5b8cff; color: #08090c;
+      }
+      button:disabled { opacity: 0.4; cursor: not-allowed; }
+      button.stop { background: #ff6b6b; }
+      #log { opacity: 0.75; font-size: 0.9rem; white-space: pre-wrap; }
+      a { color: #5b8cff; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Live meeting capture</h1>
+      <div class="roles" id="roles"></div>
+      <div class="controls">
+        <button id="start">Start meeting</button>
+        <button id="stop" class="stop" disabled>Stop meeting</button>
+      </div>
+      <div id="log">Scan a QR with each phone, then Start.</div>
+    </main>
+    <script>
+      const rolesEl = document.getElementById("roles");
+      const logEl = document.getElementById("log");
+      const startBtn = document.getElementById("start");
+      const stopBtn = document.getElementById("stop");
+      let meetingId = null;
+      let pollingNotes = false;
+
+      function log(text) {
+        logEl.textContent = text;
+      }
+
+      async function refresh() {
+        const s = await (await fetch("/status")).json();
+        rolesEl.innerHTML = s.roles
+          .map(
+            (r) => `<div class="role-card">
+                <h2>${r}</h2>
+                <img src="/qr/${r}.png" alt="QR for ${r}" />
+                <div class="pill ${s.connected[r] ? "on" : ""}"><span class="dot"></span>${s.connected[r] ? "Connected" : "Waiting"}</div>
+              </div>`
+          )
+          .join("");
+
+        startBtn.disabled = s.started;
+        stopBtn.disabled = !s.started;
+
+        if (s.started) log(`Recording meeting ${s.meetingId}…`);
+        if (s.processing) log(`Meeting ${s.meetingId} stopped — transcribing & summarizing with Gemini…`);
+        if (s.done && s.meetingId && !pollingNotes) {
+          pollingNotes = true;
+          log(`Notes ready: `);
+          const link = document.createElement("a");
+          link.href = `/meetings/${s.meetingId}/notes.md`;
+          link.textContent = `/meetings/${s.meetingId}/notes.md`;
+          link.target = "_blank";
+          logEl.appendChild(link);
+        }
+      }
+
+      startBtn.addEventListener("click", async () => {
+        const res = await (await fetch("/start", { method: "POST" })).json();
+        meetingId = res.meetingId;
+      });
+
+      stopBtn.addEventListener("click", async () => {
+        pollingNotes = false;
+        await fetch("/stop", { method: "POST" });
+      });
+
+      setInterval(refresh, 1000);
+      refresh();
+    </script>
+  </body>
+</html>

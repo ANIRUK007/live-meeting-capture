@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meeting capture</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        background: #0f1115; color: #e8e9ed; text-align: center;
+      }
+      main { width: min(26rem, 90vw); padding: 2rem 0; }
+      h1 { font-size: 1.2rem; margin: 0 0 0.25rem; text-transform: capitalize; }
+      .sub { opacity: 0.55; margin: 0 0 1.5rem; font-size: 0.88rem; }
+      button {
+        padding: 0.8rem 2rem; border-radius: 999px; border: 0; cursor: pointer;
+        font: inherit; font-weight: 600; background: #5b8cff; color: #08090c;
+      }
+      button:disabled { opacity: 0.45; }
+      #status { margin-top: 1.5rem; opacity: 0.75; }
+      #status.live { color: #4ade80; }
+      .dot {
+        display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+        background: #555b66; margin-right: 0.5rem; vertical-align: -1px;
+      }
+      #status.live .dot { background: #4ade80; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1 id="role">role</h1>
+      <p class="sub">Keep this tab open and the phone near you until the meeting ends.</p>
+      <button id="join">Join as mic</button>
+      <p id="status"><span class="dot"></span>Not connected</p>
+    </main>
+    <script>
+      const role = new URLSearchParams(location.search).get("role") || "unknown";
+      document.getElementById("role").textContent = role;
+      const statusEl = document.getElementById("status");
+      const joinBtn = document.getElementById("join");
+
+      function setStatus(text, live) {
+        statusEl.className = live ? "live" : "";
+        statusEl.innerHTML = `<span class="dot"></span>${text}`;
+      }
+
+      const CHUNK_MS = 500;
+
+      async function join() {
+        joinBtn.disabled = true;
+        setStatus("Requesting microphone…");
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+        const ws = new WebSocket(`wss://${location.host}/ws/${role}`);
+        ws.binaryType = "arraybuffer";
+
+        const ctx = new AudioContext();
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(4096, 1, 1);
+        // ponytail: ScriptProcessorNode is deprecated but universally supported and
+        // one line to wire up; swap for an AudioWorklet if a browser drops support.
+        const chunkSamples = Math.round((ctx.sampleRate * CHUNK_MS) / 1000);
+        let floatBuf = new Float32Array(0);
+        let startPerf = null;
+        let started = false;
+
+        function floatTo16(f32) {
+          const i16 = new Int16Array(f32.length);
+          for (let i = 0; i < f32.length; i++) {
+            const s = Math.max(-1, Math.min(1, f32[i]));
+            i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+          }
+          return i16;
+        }
+
+        processor.onaudioprocess = (e) => {
+          if (!started) return;
+          const input = e.inputBuffer.getChannelData(0);
+          const merged = new Float32Array(floatBuf.length + input.length);
+          merged.set(floatBuf);
+          merged.set(input, floatBuf.length);
+          floatBuf = merged;
+
+          while (floatBuf.length >= chunkSamples) {
+            const piece = floatBuf.slice(0, chunkSamples);
+            floatBuf = floatBuf.slice(chunkSamples);
+            const seq = Math.round((performance.now() - startPerf) / CHUNK_MS);
+            const pcm = floatTo16(piece);
+            const frame = new Uint8Array(4 + pcm.byteLength);
+            new DataView(frame.buffer).setUint32(0, seq, false);
+            frame.set(new Uint8Array(pcm.buffer), 4);
+            ws.send(frame.buffer);
+          }
+        };
+
+        ws.onopen = () => {
+          ws.send(JSON.stringify({ sampleRate: ctx.sampleRate }));
+          source.connect(processor);
+          processor.connect(ctx.destination);
+          setStatus("Connected — waiting for host to start", false);
+        };
+
+        ws.onmessage = (ev) => {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === "start") {
+            startPerf = performance.now();
+            started = true;
+            setStatus("Recording…", true);
+          } else if (msg.type === "stop") {
+            started = false;
+            setStatus("Meeting ended — thanks!", false);
+            processor.disconnect();
+            source.disconnect();
+            stream.getTracks().forEach((t) => t.stop());
+            ws.close();
+          }
+        };
+
+        ws.onerror = () => setStatus("Connection error", false);
+        ws.onclose = () => {
+          if (started) setStatus("Disconnected", false);
+        };
+      }
+
+      joinBtn.addEventListener("click", () => join().catch((e) => setStatus(`Failed: ${e.message}`, false)));
+    </script>
+  </body>
+</html>
