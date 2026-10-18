@@ -24,7 +24,7 @@ technical approaches, action items, open questions — via Gemini.
 5. **Notes.** Saved to `data/meetings/<timestamp>/notes.md`, linked from the
    display page once ready.
 
-## Run it
+## Run it locally (laptop on the room's Wi-Fi)
 
 ```
 python3 -m venv .venv && source .venv/bin/activate
@@ -40,6 +40,21 @@ page with the QR codes. Phones must be on the same LAN/Wi-Fi.
 reach the laptop by LAN IP (not `localhost`), so a self-signed cert is
 generated on first run. Each phone's browser will show a one-time "not
 secure" warning — tap through it once per phone.
+
+## Run it on Render
+
+`render.yaml` is a ready blueprint. On [render.com](https://render.com):
+**New → Blueprint** → pick the `live-meeting-capture` GitHub repo → it reads
+`render.yaml` and creates the web service. Set the `GEMINI_API_KEY` secret
+in the Render dashboard (left blank in the blueprint on purpose). Render
+terminates TLS and injects `RENDER_EXTERNAL_URL`, which the app uses
+automatically for the QR codes — no self-signed cert, no LAN requirement,
+phones can join from anywhere with internet.
+
+Default plan is ephemeral disk: a meeting's audio/transcript/notes live only
+until the next restart or deploy. Fine for "record, read the notes, done in
+the same session." If meetings need to survive a redeploy, add a persistent
+disk mounted at `/app/data` in the Render dashboard.
 
 ## Known limits (deliberate, cheap to lift later)
 

@@ -34,8 +34,13 @@
       }
       button:disabled { opacity: 0.4; cursor: not-allowed; }
       button.stop { background: #ff6b6b; }
-      #log { opacity: 0.75; font-size: 0.9rem; white-space: pre-wrap; }
+      #log { opacity: 0.75; font-size: 0.9rem; white-space: pre-wrap; margin-bottom: 1rem; }
       a { color: #5b8cff; }
+      #result { display: none; border: 1px solid #22262e; border-radius: 12px; padding: 1.25rem; background: #171a21; }
+      #result.show { display: block; }
+      #notes { white-space: pre-wrap; font: 14px/1.6 ui-monospace, monospace; margin: 0 0 1rem; }
+      #result summary { cursor: pointer; opacity: 0.7; font-size: 0.85rem; margin-bottom: 0.5rem; }
+      #transcript { white-space: pre-wrap; font: 13px/1.5 ui-monospace, monospace; opacity: 0.75; max-height: 20rem; overflow-y: auto; }
     </style>
   </head>
   <body>
@@ -47,12 +52,22 @@
         <button id="stop" class="stop" disabled>Stop meeting</button>
       </div>
       <div id="log">Scan a QR with each phone, then Start.</div>
+      <div id="result">
+        <pre id="notes"></pre>
+        <details>
+          <summary>Full transcript</summary>
+          <pre id="transcript"></pre>
+        </details>
+      </div>
     </main>
     <script>
       const rolesEl = document.getElementById("roles");
       const logEl = document.getElementById("log");
       const startBtn = document.getElementById("start");
       const stopBtn = document.getElementById("stop");
+      const resultEl = document.getElementById("result");
+      const notesEl = document.getElementById("notes");
+      const transcriptEl = document.getElementById("transcript");
       let meetingId = null;
       let pollingNotes = false;
 
@@ -75,20 +90,24 @@
         startBtn.disabled = s.started;
         stopBtn.disabled = !s.started;
 
-        if (s.started) log(`Recording meeting ${s.meetingId}…`);
+        if (s.started) { log(`Recording meeting ${s.meetingId}…`); resultEl.classList.remove("show"); }
         if (s.processing) log(`Meeting ${s.meetingId} stopped — transcribing & summarizing with Gemini…`);
         if (s.done && s.meetingId && !pollingNotes) {
           pollingNotes = true;
-          log(`Notes ready: `);
-          const link = document.createElement("a");
-          link.href = `/meetings/${s.meetingId}/notes.md`;
-          link.textContent = `/meetings/${s.meetingId}/notes.md`;
-          link.target = "_blank";
-          logEl.appendChild(link);
+          log(`Meeting ${s.meetingId} — notes below.`);
+          const [notes, transcript] = await Promise.all([
+            fetch(`/meetings/${s.meetingId}/notes.md`).then((r) => r.text()),
+            fetch(`/meetings/${s.meetingId}/transcript.txt`).then((r) => r.text()),
+          ]);
+          notesEl.textContent = notes;
+          transcriptEl.textContent = transcript;
+          resultEl.classList.add("show");
         }
       }
 
       startBtn.addEventListener("click", async () => {
+        pollingNotes = false;
+        resultEl.classList.remove("show");
         const res = await (await fetch("/start", { method: "POST" })).json();
         meetingId = res.meetingId;
       });

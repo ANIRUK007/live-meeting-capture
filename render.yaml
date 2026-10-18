@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: live-meeting-capture
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python3 -m server.main
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ROLES
+        value: board,audience
+      # ponytail: no disk mounted, so data/meetings is ephemeral and wiped on
+      # restart/redeploy — fine for "record a meeting, read its notes, move on".
+      # If meetings need to survive a redeploy, add a Render persistent disk
+      # mounted at /app/data (Starter plan or above) and remove this comment.

@@ -13,11 +13,17 @@ sequence number. The server mixes matched sequence numbers across roles
 On Stop, the file is wrapped into a WAV and handed to Gemini for transcript
 + structured markdown notes in the background.
 
-getUserMedia requires a secure context for anything that is not literally
-"localhost", and phones reach this server by LAN IP, so this always runs over
-HTTPS with a self-signed cert (see run.sh). Expect one "not secure" click-
-through per phone, once. ponytail: self-signed cert; swap for a CA-trusted
-one (mkcert, Tailscale cert) if the warning becomes a real problem.
+getUserMedia requires a secure context. Two ways to get that here:
+
+- Local laptop on the room's LAN: phones reach this by LAN IP, so run.sh
+  generates a self-signed cert and server/main.py serves HTTPS directly.
+  Expect one "not secure" click-through per phone, once.
+- Deployed (e.g. Render): the platform terminates TLS at its edge and
+  forwards plain HTTP to this process, so no local cert is needed — detected
+  via $RENDER_EXTERNAL_URL (or set PUBLIC_BASE_URL yourself on any other host).
+
+ponytail: self-signed cert for the local path; swap for a CA-trusted one
+(mkcert, Tailscale cert) if that warning becomes a real problem.
 """
 
 from __future__ import annotations
@@ -60,6 +66,18 @@ def lan_ip() -> str:
         s.close()
 
 
+def public_base_url() -> str:
+    """Base URL phones should use to reach this server.
+
+    Prefers an explicit override, then Render's auto-injected URL, then falls
+    back to the laptop's LAN IP for the local self-signed-HTTPS setup.
+    """
+    override = os.getenv("PUBLIC_BASE_URL") or os.getenv("RENDER_EXTERNAL_URL")
+    if override:
+        return override.rstrip("/")
+    return f"https://{lan_ip()}:{os.getenv('PORT', '8443')}"
+
+
 class Meeting:
     def __init__(self):
         self.sockets: dict[str, set[WebSocket]] = {r: set() for r in ROLES}
@@ -91,7 +109,7 @@ async def join():
 
 @app.get("/qr/{role}.png")
 async def qr(role: str):
-    url = f"https://{lan_ip()}:{os.getenv('PORT', '8443')}/join?role={role}"
+    url = f"{public_base_url()}/join?role={role}"
     img = qrcode.make(url)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -178,6 +196,14 @@ async def get_notes(meeting_id: str):
     return FileResponse(path, media_type="text/markdown")
 
 
+@app.get("/meetings/{meeting_id}/transcript.txt")
+async def get_transcript(meeting_id: str):
+    path = DATA_DIR / meeting_id / "transcript.txt"
+    if not path.exists():
+        return JSONResponse({"error": "not ready"}, status_code=404)
+    return FileResponse(path, media_type="text/plain")
+
+
 @app.websocket("/ws/{role}")
 async def ws_endpoint(ws: WebSocket, role: str):
     if role not in ROLES:
@@ -213,11 +239,14 @@ if __name__ == "__main__":
 
     port = int(os.getenv("PORT", "8443"))
     certs = Path(__file__).parent.parent / "certs"
-    print(f"Display page: https://{lan_ip()}:{port}/  (phones scan the QR codes shown there)")
+    keyfile, certfile = certs / "key.pem", certs / "cert.pem"
+    local_tls = keyfile.exists() and certfile.exists()
+
+    print(f"Display page: {public_base_url()}/  (phones scan the QR codes shown there)")
     uvicorn.run(
         "server.main:app",
         host="0.0.0.0",
         port=port,
-        ssl_keyfile=str(certs / "key.pem"),
-        ssl_certfile=str(certs / "cert.pem"),
+        ssl_keyfile=str(keyfile) if local_tls else None,
+        ssl_certfile=str(certfile) if local_tls else None,
     )
